@@ -2,7 +2,7 @@
 
 /**
  * Page type for creating a page that contains a form that visitors can
- * use to subscript to mailing lists.
+ * use to subscribe to mailing lists.
  * 
  * @package newsletter
  */
@@ -88,12 +88,10 @@ class SubscriptionPage extends Page {
 			}
 		}
 
-
-
 		//Since Email field is the Recipient's identifier,
-		//and newsletters subscription is non-sence if no email is given by the user,
+		//and newsletters subscription is nonsense if no email is given by the user,
 		//we should force that email to be checked and required.
-		//FisrtName should be checked as default, though it might not be required
+		//FirstName should be checked as default, though it might not be required
 		$defaults = array("Email", "FirstName");
 				
 		$extra = array('CustomLabel'=>"Varchar","ValidationMessage"=>"Varchar","Required" =>"Boolean");

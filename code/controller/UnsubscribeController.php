@@ -17,6 +17,12 @@ class UnsubscribeController extends Page_Controller {
 		'resubscribe',
 		'Form',
 		'ResubscribeForm',
+		'sendmeunsubscribelink',
+		'linksent'
+	);
+
+	public static $url_handlers = array(
+		'unsubscribe/$action' => 'UnsubscribeController'
 	);
 
 	function __construct($data = null) {
@@ -52,9 +58,11 @@ class UnsubscribeController extends Page_Controller {
 	}
 	
 	private function getMailingLists($recipient = null){
+		$validateHash = Convert::raw2sql($this->urlParams['ValidateHash']);
+		$recipient = Recipient::get()->filter("ValidateHash", $validateHash);
 		$siteConfig = DataObject::get_one("SiteConfig");
-		if($siteConfig->GlobalUnsubscribe){
-			return $mailinglists = $recipient->MailingLists();
+		if($siteConfig->GlobalUnsubscribe && $recipient){
+			return $mailinglists = $recipient->MailingLists;
 		}else{
 			$mailinglistIDs = $this->urlParams['IDs'];
 			if($mailinglistIDs) {
@@ -90,9 +98,14 @@ class UnsubscribeController extends Page_Controller {
 			Controller::curr()->redirect($url, 302);
 			return $url;
 		}else{
-			return $this->customise(array(
+			$listForm = $this->EmailAddressForm();
+		/*	return $this->customise(array(
 				'Title' => _t('Newsletter.INVALIDLINK', 'Invalid Link'),
 				'Content' => _t('Newsletter.INVALIDUNSUBSCRIBECONTENT', 'This unsubscribe link is invalid')
+			))->renderWith('Page');*/
+		
+			return $this->customise(array(
+				'Content' => $listForm->forTemplate()
 			))->renderWith('Page');
 		}
     }
@@ -140,6 +153,92 @@ class UnsubscribeController extends Page_Controller {
 			'Content' => $content,
 			'Form' => $form
 		))->renderWith('Page');
+	}
+
+	function linksent(){
+		$form = new Form($this, "UnsubscribeLinkSent", new FieldList(), new FieldList());
+		
+		if(isset($_GET['SendEmail']) && $_GET['SendEmail']){
+			$form -> setMessage(sprintf(_t('Unsubscribe.LINKSENTTO', "The unsubscribe link has been sent to %s"), $_GET['SendEmail']), "good");
+			return $this->customise(array(
+	    		'Title' => _t('Unsubscribe.LINKSENT', 'Unsubscribe Link Sent'),
+	    		'Form' => $form
+	    	))->renderWith('Page');
+		}elseif(isset($_GET['SendError']) && $_GET['SendError']){
+			$form -> setMessage(sprintf(_t('Unsubscribe.LINKSENDERR', "Sorry, currently we have internal error, and can't send the unsubscribe link to %s"), $_GET['SendError']), "good");
+			return $this->customise(array(
+	    		'Title' => _t('Unsubscribe.LINKNOTSEND', 'Unsubscrib Link Can\'t Be Sent'),
+	    		'Form' => $form
+	    	))->renderWith('Page');
+		}
+	}
+
+	/**
+	* Display a form with all the mailing lists that the user is subscribed to
+	*/
+	function MailingListForm() {
+		$member = $this->getMember();
+		return new Unsubscribe_MailingListForm($this, 'MailingListForm', $member);
+	}
+
+	/**
+	* Display a form allowing the user to input their email address
+	*/
+	function EmailAddressForm() {
+		return new UnsubscribeEmailAddressForm( $this, 'EmailAddressForm' );
+	}
+
+	/**
+	* Show the lists for the user with the given email address
+	*/
+	function sendmeunsubscribelink( $data) {
+		if(isset($data['Email']) && $data['Email']) {
+			$member = DataObject::get_one("Recipient", "Email = '".$data['Email']."'");
+			if($member){
+				if(!$from = Email::getAdminEmail()){
+					$from = 'noreply@'.Director::BaseURL();
+				}
+				$to = $member->Email;
+				$subject = "Unsubscribe Link";
+				if($member->getHashText){
+					
+					$member->AutoLoginExpired = date('Y-m-d', time() + (86400 * 2));
+					$member->write();
+				}else{
+					$member->generateValidateHashAndStore();
+				}
+				$link = Director::absoluteBaseURL() . $this->RelativeLink('index') ."/" . $member->AutoLoginHash;
+				$membername = $member->getTitle();
+				$body = $this->customise(array(
+		    		'Content' => <<<HTML
+Dear $membername,<br />
+<p>Please click the link below to unsubscribe from our newsletters<br />
+$link<br />
+<br >
+<br >
+Thanks
+</p>
+HTML
+		    	))->renderWith('UnsubscribeEmail', 'Page');
+				$email = new Email($from, $to, $subject, $body);
+				$result = $email -> send();
+				if($result){
+					Director::redirect(Director::absoluteBaseURL() . $this->RelativeLink('linksent') . "?SendEmail=".$data['Email']);
+				}else{
+					Director::redirect(Director::absoluteBaseURL() . $this->RelativeLink('linksent') . "?SendError=".$data['Email']);
+				}
+			}else{
+				$form = $this->EmailAddressForm();
+				$message = sprintf(_t("Unsubscribe.NOTSIGNUP", "Sorry, '%s' doesn't appear to be an sign-up member with us"), $data['Email']);
+				$form->sessionMessage($message, 'bad');
+				Director::redirectBack();
+			}
+		} else {
+			$form = $this->EmailAddressForm();
+			$message = _t("Unsubscribe.NOEMAILGIVEN", "Sorry, please type in a valid email address");
+			$form->sessionMessage($message, 'bad');
+			Director::redirectBack();
+		}
 	}
 
    /**
@@ -206,3 +305,31 @@ class UnsubscribeController extends Page_Controller {
 		}
   }
 }
+
+/**
+ * 1st step form for the Unsubscribe page.
+ * The form will let people enter an email address and press a button to continue.
+ *
+ * @package newsletter
+ */
+class UnsubscribeEmailAddressForm extends Form {
+
+	function __construct( $controller, $name ) {
+
+		$fields = new FieldList(
+			new EmailField( 'Email', _t('Unsubscribe.EMAILADDR', 'Email address') )
+		);
+
+		$actions = new FieldList(
+			new FormAction( 'sendmeunsubscribelink', _t('Unsubscribe.SENDMEUNSUBSCRIBELINK', 'Send me unsubscribe link'))
+		);
+
+		parent::__construct( $controller, $name, $fields, $actions, new RequiredFields(array('Email')));
+		$this->disableSecurityToken();
+	}
+
+	function FormAction() {
+		return $this->controller->RelativeLink('sendmeunsubscribelink') . "/?executeForm=" . $this->name;
+	}
+}
+
